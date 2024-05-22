@@ -1,5 +1,8 @@
 #include <wrapcl.h>
 #include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 //https://stackoverflow.com/questions/24326432/convenient-way-to-show-opencl-error-codes
 const char* getErrorString(cl_int error)
@@ -411,19 +414,86 @@ void SaveProgramToBinary(cl_program program_cl,const char* file_name) {
 }
 
 
+// Custom error checking function for OpenCL errors
+void checkErr(cl_int err) {
+    if (err != CL_SUCCESS) {
+        fprintf(stderr, "OpenCL Error: %d\n", err);
+        exit(EXIT_FAILURE);
+    }
+}
+
 cl_program SetupBuildProgramWithBinary(cl_context context, cl_device_id* devices, const char* binary_file_name) {
     cl_int err;
     cl_int binary_status;
-    FILE* program_handle = fopen(binary_file_name, "r");
-    fseek(program_handle, 0, SEEK_END);
+
+    // Attempt to open the binary file
+    FILE* program_handle = fopen(binary_file_name, "rb");
+    if (program_handle == NULL) {
+        fprintf(stderr, "Error: Could not open binary file '%s'\n", binary_file_name);
+        perror("fopen");
+        return NULL;
+    }
+
+    // Move to the end of the file to determine its size
+    if (fseek(program_handle, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Error: Could not seek to the end of the binary file '%s'\n", binary_file_name);
+        perror("fseek");
+        fclose(program_handle);
+        return NULL;
+    }
+
     size_t program_size = ftell(program_handle);
+    if (program_size == -1L) {
+        fprintf(stderr, "Error: Could not determine the size of the binary file '%s'\n", binary_file_name);
+        perror("ftell");
+        fclose(program_handle);
+        return NULL;
+    }
+
+    // Rewind the file to the beginning
     rewind(program_handle);
-    char* binary_buffer = (char*)malloc(program_size + 1);
-    fread(binary_buffer, sizeof(char), program_size, program_handle);
-    binary_buffer[program_size] = '\0';
+
+    // Allocate memory for the binary content
+    char* binary_buffer = (char*)malloc(program_size);
+    if (binary_buffer == NULL) {
+        fprintf(stderr, "Error: Could not allocate memory for the binary file '%s'\n", binary_file_name);
+        perror("malloc");
+        fclose(program_handle);
+        return NULL;
+    }
+
+    // Read the file content into the buffer
+    size_t read_size = fread(binary_buffer, sizeof(char), program_size, program_handle);
+    if (read_size != program_size) {
+        fprintf(stderr, "Error: Could not read the binary file '%s'\n", binary_file_name);
+        perror("fread");
+        free(binary_buffer);
+        fclose(program_handle);
+        return NULL;
+    }
+
+    // Close the file
     fclose(program_handle);
-    cl_program program_cl = clCreateProgramWithBinary(context, 1, devices, &program_size, (const unsigned char**)&binary_buffer, &binary_status, &err); checkErr(err);
-    err = clBuildProgram(program_cl, 1, devices, NULL, NULL, NULL); checkErr(err);
+
+    // Create the OpenCL program with the binary content
+    cl_program program_cl = clCreateProgramWithBinary(context, 1, devices, &program_size, 
+                                                      (const unsigned char**)&binary_buffer, 
+                                                      &binary_status, &err);
+    free(binary_buffer);
+    if (err != CL_SUCCESS || binary_status != CL_SUCCESS) {
+        fprintf(stderr, "Error: Could not create OpenCL program from binary file '%s'\n", binary_file_name);
+        checkErr(err);
+        return NULL;
+    }
+
+    // Build the OpenCL program
+    err = clBuildProgram(program_cl, 1, devices, NULL, NULL, NULL);
+    if (err != CL_SUCCESS) {
+        fprintf(stderr, "Error: Could not build OpenCL program from binary file '%s'\n", binary_file_name);
+        checkErr(err);
+        return NULL;
+    }
+
     return program_cl;
 }
 
